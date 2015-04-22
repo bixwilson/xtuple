@@ -7,7 +7,7 @@ SELECT dropIfExists('VIEW', 'bom', 'api');
     item_number::varchar AS item_number,
     bomhead_revision::varchar AS revision,
     bomhead_docnum AS document_number,
-    bomhead_revisiondate AS revision_date,
+    formatDate(bomhead_revisiondate) AS revision_date,
     bomhead_batchsize AS batch_size,
     bomhead_requiredqtyper AS total_qty_per
   FROM
