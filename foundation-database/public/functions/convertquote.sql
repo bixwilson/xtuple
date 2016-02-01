@@ -4,6 +4,8 @@ CREATE OR REPLACE FUNCTION convertQuote(INTEGER) RETURNS INTEGER AS $$
 -- See www.xtuple.com/CPAL for the full text of the software license.
 DECLARE
   pQuheadid ALIAS FOR $1;
+  _qunumber TEXT;
+  _ponumber TEXT;
   _soheadid INTEGER;
   _soitemid INTEGER;
   _orderid INTEGER;
@@ -62,13 +64,20 @@ BEGIN
     RETURN -5;
   END IF;
 
-  IF ( (_usespos) AND (NOT _blanketpos) ) THEN
-    PERFORM cohead_id
-    FROM quhead JOIN cohead ON ( (cohead_cust_id=quhead_cust_id) AND
-                                 (UPPER(cohead_custponumber)=UPPER(quhead_custponumber)) )
+  IF (_usespos) THEN
+    SELECT quhead_number, COALESCE(quhead_custponumber, ''), cohead_id INTO _qunumber, _ponumber, _soheadid
+    FROM quhead LEFT OUTER JOIN cohead ON ( (cohead_cust_id=quhead_cust_id) AND
+                                            (UPPER(cohead_custponumber)=UPPER(quhead_custponumber)) )
     WHERE (quhead_id=pQuheadid);
-    IF (FOUND) THEN
-      RAISE EXCEPTION 'Duplicate Customer PO';
+    IF (_ponumber = '') THEN
+      RAISE EXCEPTION 'Customer PO required for Quote % [xtuple: convertQuote, -7, %]',
+                      _qunumber, _qunumber;
+    END IF;
+  
+    IF ( (NOT _blanketpos) AND (_soheadid IS NOT NULL) ) THEN
+      RAISE EXCEPTION 'Duplicate Customer PO % for Quote % [xtuple: convertQuote, -8, %, %]',
+                      _ponumber, _qunumber,
+                      _ponumber, _qunumber;
     END IF;
   END IF;
   
@@ -103,7 +112,7 @@ BEGIN
     cohead_fob, cohead_shipvia,
     cohead_ordercomments, cohead_shipcomments,
     cohead_freight, cohead_misc, cohead_misc_accnt_id, cohead_misc_descrip,
-    cohead_holdtype, cohead_wasquote, cohead_quote_number, cohead_prj_id,
+    cohead_holdtype, cohead_quote_number, cohead_prj_id,
     cohead_curr_id, cohead_taxzone_id, cohead_taxtype_id,
     cohead_shipto_cntct_id, cohead_shipto_cntct_honorific, cohead_shipto_cntct_first_name,
     cohead_shipto_cntct_middle, cohead_shipto_cntct_last_name, cohead_shipto_cntct_suffix,
@@ -130,7 +139,7 @@ BEGIN
          quhead_fob, quhead_shipvia,
          quhead_ordercomments, quhead_shipcomments,
          quhead_freight, quhead_misc, quhead_misc_accnt_id, quhead_misc_descrip,
-         'N', TRUE, quhead_number, quhead_prj_id,
+         'N', quhead_number, quhead_prj_id,
 	 quhead_curr_id, quhead_taxzone_id, quhead_taxtype_id,
 	 quhead_shipto_cntct_id, quhead_shipto_cntct_honorific,
 	 quhead_shipto_cntct_first_name, quhead_shipto_cntct_middle, quhead_shipto_cntct_last_name,
@@ -180,7 +189,7 @@ BEGIN
     AND   (comment_source_id=pQuheadid) );
 
   FOR _r IN SELECT quitem.*,
-                   quhead_number, quhead_prj_id,
+                   quhead_number, quhead_prj_id, quhead_saletype_id,
                    itemsite_item_id, itemsite_leadtime,
                    itemsite_createsopo, itemsite_createsopr,
                    item_type, COALESCE(quitem_itemsrc_id, itemsrc_id, -1) AS itemsrcid
@@ -210,12 +219,13 @@ BEGIN
       _r.quitem_qtyord, 0, 0,
       _r.quitem_qty_uom_id, _r.quitem_qty_invuomratio,
       _r.quitem_price_uom_id, _r.quitem_price_invuomratio,
-      stdcost(_r.itemsite_item_id), _r.quitem_prcost,
+      _r.quitem_unitcost, _r.quitem_prcost,
       _r.quitem_custpn, _r.quitem_memo, _r.quitem_taxtype_id, -1 );
 
     IF (fetchMetricBool('enablextcommissionission')) THEN
       PERFORM xtcommission.getSalesReps(quhead_cust_id, quhead_shipto_id,
-                                        _r.itemsite_item_id, _r.quitem_price,
+                                        _r.itemsite_item_id, _r.quhead_saletype_id,
+                                        _r.quitem_price, _r.quitem_custprice,
                                         _soitemid, 'SalesItem')
       FROM quhead
       WHERE (quhead_id=pQuheadid);
@@ -242,8 +252,10 @@ BEGIN
     IF (_r.quitem_createorder) THEN
 
       IF (_r.item_type IN ('M')) THEN
-        SELECT createWo( CAST(_r.quhead_number AS INTEGER), supply.itemsite_id, 1, (_r.quitem_qtyord * _r.quitem_qty_invuomratio),
-                         _r.itemsite_leadtime, _r.quitem_scheddate, _r.quitem_memo, 'S', _soitemid, _r.quhead_prj_id ) INTO _orderId
+        SELECT createWo( CAST(_soNum AS INTEGER), supply.itemsite_id, 1,
+                         (_r.quitem_qtyord * _r.quitem_qty_invuomratio),
+                         _r.itemsite_leadtime, _r.quitem_scheddate, _r.quitem_memo,
+                         'S', _soitemid, _r.quhead_prj_id ) INTO _orderId
         FROM itemsite sold, itemsite supply
         WHERE ((sold.itemsite_item_id=supply.itemsite_item_id)
          AND (supply.itemsite_warehous_id=_r.quitem_order_warehous_id)
@@ -258,7 +270,8 @@ BEGIN
            AND  (charass_target_id=_r.quitem_id));
 
       ELSIF ( (_r.item_type IN ('P', 'O')) AND (_r.itemsite_createsopr) ) THEN
-        SELECT createPr( CAST(_r.quhead_number AS INTEGER), _r.quitem_itemsite_id, (_r.quitem_qtyord * _r.quitem_qty_invuomratio),
+        SELECT createPr( CAST(_soNum AS INTEGER), _r.quitem_itemsite_id,
+                         (_r.quitem_qtyord * _r.quitem_qty_invuomratio),
                          _r.quitem_scheddate, '', 'S', _soitemid ) INTO _orderId;
         _orderType := 'R';
         UPDATE pr SET pr_prj_id=_r.quhead_prj_id WHERE pr_id=_orderId;
@@ -280,6 +293,10 @@ BEGIN
 
   SELECT metric_value INTO _showConvertedQuote
   FROM metric WHERE metric_name = 'ShowQuotesAfterSO';
+
+  -- bug 26513 - mobilized databases delete the quote in a cohead trigger when cohead_wasquote
+  -- on INSERT. set the flag late, otherwise quitems may be removed before they can be copied
+  UPDATE cohead SET cohead_wasquote = TRUE WHERE cohead_id = _soheadid;
 
   IF (_showConvertedQuote) THEN
     UPDATE quhead

@@ -41,8 +41,6 @@ white:true*/
 
     numberPolicySetting: 'CONumberGeneration',
 
-    printOnSaveSetting: 'DefaultPrintSOOnSave',
-
     documentDateKey: "orderDate",
 
     handlers: {
@@ -85,6 +83,54 @@ white:true*/
       }
     },
 
+    getPrintParameters: function (callback) {
+      var that = this,
+        dispOptions = {},
+        dispParams = {
+          docNumber: this.id,
+          table: "cohead",
+          column: "cohead_number"
+        };
+
+      dispOptions.success = function (resp) {
+        var id = resp,
+        printParameters = [
+          {name: "sohead_id", type: "integer", value: id},
+          {name: "hide closed", type: "boolean", value: "true"}
+          // Optional. TODO - What should determine warehouse id?
+          //{name: "warehous_id", type: "integer", value: null} 
+        ];
+        /* 
+          TODO - set printParameters according to the Report's req. parameters, i.e. PackingList:
+        if (that.reportName === "PackingList") {
+          printParameters.push(
+            {name: "shiphead_id", type: "integer", value: },
+            {name: "head_id", type: "integer", value: },
+            {name: "head_type", type: "string", value: },
+            {name: "MultiWhs", type: "boolean", value: },
+            {name: "warehouse_id", type: integer, value: }
+          );
+        }
+        */
+
+        callback({
+          id: id,
+          reportName: that.reportName || "CustOrderAcknowledgement",
+          printParameters: printParameters
+        });
+      };
+
+      if (that.custFormType) {
+        this.dispatch("XM.Sales", "findCustomerForm", [this.getValue("customer.uuid"), that.custFormType], {success: function (resp) {
+          that.reportName = resp;
+          
+          that.dispatch('XM.Model', 'fetchPrimaryKeyId', dispParams, dispOptions);
+        }});
+      } else {
+        that.dispatch('XM.Model', 'fetchPrimaryKeyId', dispParams, dispOptions);
+      }
+    },
+
     holdTypeDidChange: function () {
       if (!this.get("holdType")) {
         _.each(this.get("workflow").where(
@@ -101,8 +147,10 @@ white:true*/
         currentHoldType = this.get("holdType"),
         defaultHoldType = this.getValue("saleType.defaultHoldType") || null;
 
-      this.inheritWorkflowSource(this.get("saleType"), "XM.SalesOrderCharacteristic",
-        "XM.SalesOrderWorkflow");
+      if (!XT.session.settings.get("TriggerWorkflow")) {
+        this.inheritWorkflowSource(this.get("saleType"), "XM.SalesOrderCharacteristic",
+          "XM.SalesOrderWorkflow");
+      }
 
       if (this.getStatus() === XM.Model.EMPTY) {
         // on a new order, set the hold type to the sale type default
@@ -196,32 +244,6 @@ white:true*/
       return defaults;
     },
 
-    destroy: function (options) {
-      var status = this.getParent().get("status"),
-        K = XM.SalesOrder,
-        that = this,
-        payload = {
-          type: K.QUESTION,
-        },
-        args = arguments,
-        message;
-
-      if (status !== K.CLOSED_STATUS &&
-        status !== K.CANCELLED_STATUS) {
-        message = "_deleteLine?".loc();
-        payload.callback = function (response) {
-          if (response.answer) {
-            XM.Model.prototype.destroy.apply(that, args);
-          }
-        };
-      } else {
-        // Must be closed, shouldn't have come here.
-        return;
-      }
-
-      this.notify(message, payload);
-    },
-
     isActive: function () {
       return this.get("status") === XM.SalesOrder.OPEN_STATUS;
     }
@@ -244,58 +266,6 @@ white:true*/
     recordType: 'XM.SalesOrderComment',
 
     sourceName: 'S'
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderAccount = XM.Model.extend(/** @lends XM.SalesOrderAccount.prototype */{
-
-    recordType: 'XM.SalesOrderAccount',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderContact = XM.Model.extend(/** @lends XM.SalesOrderContact.prototype */{
-
-    recordType: 'XM.SalesOrderContact',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderFile = XM.Model.extend(/** @lends XM.SalesOrderFile.prototype */{
-
-    recordType: 'XM.SalesOrderFile',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderItem = XM.Model.extend(/** @lends XM.SalesOrderItem.prototype */{
-
-    recordType: 'XM.SalesOrderItem',
-
-    isDocumentAssignment: true
 
   });
 
@@ -373,7 +343,9 @@ white:true*/
 
     recordType: 'XM.SalesOrderListItem',
 
-    editableModel: 'XM.SalesOrder'
+    editableModel: 'XM.SalesOrder',
+
+    getPrintParameters: XM.SalesOrder.prototype.getPrintParameters
 
   });
 
@@ -394,83 +366,10 @@ white:true*/
 
   });
 
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderUrl = XM.Model.extend(/** @lends XM.SalesOrderUrl.prototype */{
-
-    recordType: 'XM.SalesOrderUrl',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderProject = XM.Model.extend(/** @lends XM.SalesOrderProject.prototype */{
-
-    recordType: 'XM.SalesOrderProject',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderIncident = XM.Model.extend(/** @lends XM.SalesOrderIncident.prototype */{
-
-    recordType: 'XM.SalesOrderIncident',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderOpportunity = XM.Model.extend(/** @lends XM.SalesOrderOpportunity.prototype */{
-
-    recordType: 'XM.SalesOrderOpportunity',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderCustomer = XM.Model.extend(/** @lends XM.SalesOrderCustomer.prototype */{
-
-    recordType: 'XM.SalesOrderCustomer',
-
-    isDocumentAssignment: true
-
-  });
-
-  /**
-    @class
-
-    @extends XM.Model
-  */
-  XM.SalesOrderToDo = XM.Model.extend(/* @lends XM.SalesOrderToDo */{
-
-    recordType: 'XM.SalesOrderToDo',
-
-    isDocumentAssignment: true
-
-  });
+  XT.documentAssociations.S = {
+    model: "XM.SalesOrderRelation",
+    label: "_salesOrder".loc()
+  };
 
   // ..........................................................
   // COLLECTIONS

@@ -1,5 +1,5 @@
 CREATE OR REPLACE FUNCTION _itemsiteTrigger () RETURNS TRIGGER AS $$
--- Copyright (c) 1999-2014 by OpenMFG LLC, d/b/a xTuple. 
+-- Copyright (c) 1999-2014 by OpenMFG LLC, d/b/a xTuple.
 -- See www.xtuple.com/CPAL for the full text of the software license.
 DECLARE
   _cmnttypeid INTEGER;
@@ -8,10 +8,11 @@ DECLARE
 BEGIN
 
   -- Cache some information
-  SELECT item_type INTO _r
+  -- Added item_number as part of feature request 21645
+  SELECT item_type, item_number INTO _r
   FROM item
   WHERE (item_id=NEW.itemsite_item_id);
- 
+
 -- Override values to avoid invalid data combinations
   IF (_r.item_type IN ('J','R','S')) THEN
     NEW.itemsite_planning_type := 'N';
@@ -44,11 +45,11 @@ BEGIN
     END IF;
   END IF;
 
+-- Added item_number to error messages displayed to fulfill Feature Request 21645
   IF (NEW.itemsite_qtyonhand < 0 AND NEW.itemsite_costmethod = 'A') THEN
-    RAISE EXCEPTION 'Itemsite (%) is set to use average costing and is not allowed to have a negative quantity on hand.', NEW.itemsite_id;
+    RAISE EXCEPTION 'Itemsite (%) is set to use average costing and is not allowed to have a negative quantity on hand.', 'ID: ' || NEW.itemsite_id || ', Item: ' || _r.item_number;
   ELSIF (NEW.itemsite_value < 0 AND NEW.itemsite_costmethod = 'A') THEN
-    RAISE EXCEPTION 'This transaction results in a negative itemsite value.  Itemsite (%) is set to use average costing and is not allowed to have a negative value.', NEW.itemsite_id;
-  END IF;
+    RAISE EXCEPTION 'This transaction results in a negative itemsite value.  Itemsite (%) is set to use average costing and is not allowed to have a negative value.', 'ID: ' || NEW.itemsite_id || ', Item: ' || _r.item_number;  END IF;
 
 --  Handle the ChangeLog
   IF ( SELECT (metric_value='t')
@@ -132,7 +133,7 @@ SELECT dropIfExists('trigger', 'itemsiteTrigger');
 CREATE TRIGGER itemsiteTrigger BEFORE INSERT OR UPDATE ON itemsite FOR EACH ROW EXECUTE PROCEDURE _itemsiteTrigger();
 
 CREATE OR REPLACE FUNCTION _itemsiteAfterTrigger () RETURNS TRIGGER AS $$
--- Copyright (c) 1999-2014 by OpenMFG LLC, d/b/a xTuple. 
+-- Copyright (c) 1999-2014 by OpenMFG LLC, d/b/a xTuple.
 -- See www.xtuple.com/CPAL for the full text of the software license.
 DECLARE
   _state INTEGER;
@@ -217,7 +218,7 @@ BEGIN
     IF ( NOT checkPrivilege('MaintainItemSites') ) THEN
        RAISE EXCEPTION 'You do not have privileges to maintain Item Sites.';
     END IF;
-    
+
 -- Override values to avoid invalid data combinations
     IF (NOT NEW.itemsite_posupply) THEN
       UPDATE itemsite SET
@@ -255,7 +256,7 @@ BEGIN
         itemsite_useparamsmanual = FALSE
       WHERE (itemsite_id = NEW.itemsite_id);
     END IF;
-    
+
 -- Integrity check
 
     -- Both insert and update
@@ -280,28 +281,10 @@ BEGIN
 	   	          multiply located.';
         END IF;
       END IF;
-
-      --This could be made a table constraint later, but do not want to create a big problem
-      --for users with problematic legacy data over a relatively trivial problem for now,
-      --so we will just check moving forword.
-      IF (NEW.itemsite_stocked AND NEW.itemsite_reorderlevel<=0) THEN
-        RAISE EXCEPTION 'Stocked items must have postive reorder level specified.';
-      END IF;
     END IF;
 
     IF (TG_OP = 'UPDATE') THEN
-      --This could be made a table constraint later, but do not want to create a big problem
-      --for users with problematic legacy data over a relatively trivial problem for now,
-      --so we will just check moving forword.
-      IF ((NEW.itemsite_stocked)
-        AND (NEW.itemsite_stocked != OLD.itemsite_stocked) --Avoid checking unless explicitly changed
-        AND (NEW.itemsite_reorderlevel<=0)) THEN
-        RAISE EXCEPTION 'Stocked items must have postive reorder level specified.';
-      END IF;
-    END IF;
-  
-    IF (TG_OP = 'UPDATE') THEN
-  
+
 -- Integrity check
       IF (NOT OLD.itemsite_loccntrl AND NEW.itemsite_loccntrl) THEN
         IF (SELECT count(*)=0
@@ -317,16 +300,16 @@ BEGIN
 		          multiply located.';
         END IF;
       END IF;
-   
--- Update detail records based on control method changes 
+
+-- Update detail records based on control method changes
       _wasLocationControl := OLD.itemsite_loccntrl;
       _isLocationControl := NEW.itemsite_loccntrl;
       _wasLotSerial := OLD.itemsite_controlmethod IN ('S','L');
-      _isLotSerial := NEW.itemsite_controlmethod IN ('S','L'); 
+      _isLotSerial := NEW.itemsite_controlmethod IN ('S','L');
       _wasPerishable := OLD.itemsite_perishable;
       _isPerishable := NEW.itemsite_perishable;
       _state := 0;
-    
+
       IF ( (_wasLocationControl) AND (_isLocationControl) ) THEN
         _state := 10;
       ELSIF ( (NOT _wasLocationControl) AND (NOT _isLocationControl) ) THEN
@@ -361,22 +344,6 @@ BEGIN
       ELSIF (_state IN (14, 34)) THEN
         PERFORM consolidateLocations(OLD.itemsite_id);
       ELSIF (_state IN (24, 42, 44)) THEN
-
-        RAISE NOTICE 'Deleting item site detail records,';
-
-        SELECT SUM(itemloc_qty) INTO _qty
-        FROM itemloc, location
-        WHERE ((itemloc_location_id=location_id)
-        AND (NOT location_netable) 
-        AND (itemloc_itemsite_id=OLD.itemsite_id));
-
-        IF (_qty != 0) THEN
-          UPDATE itemsite
-          SET itemsite_qtyonhand = itemsite_qtyonhand + _qty,
-            itemsite_nnqoh = itemsite_nnqoh - _qty
-          WHERE (itemsite_id=OLD.itemsite_id);
-        END IF;
-
         DELETE FROM itemloc
         WHERE (itemloc_itemsite_id=OLD.itemsite_id);
       END IF;
@@ -385,7 +352,7 @@ BEGIN
 --  Handle detail creation
 --  Create itemloc records if they do not exist
        IF (_state IN (23, 32, 33)) THEN
-          INSERT INTO itemloc 
+          INSERT INTO itemloc
             ( itemloc_itemsite_id, itemloc_location_id,
               itemloc_expiration, itemloc_qty )
             VALUES
@@ -412,9 +379,9 @@ BEGIN
 
 --  Handle Lot/Serial distribution
         IF ( (_state = 13) OR (_state = 23) OR (_state = 33) OR (_state = 43) ) THEN
-          RAISE NOTICE 'You should now use the Reassign Lot/Serial # window to assign Lot/Serial #s.';
+          RAISE WARNING 'You should now use the Reassign Lot/Serial # window to assign Lot/Serial #s.';
         END IF;
-      END IF;  
+      END IF;
       IF (OLD.itemsite_costmethod='A' AND NEW.itemsite_costmethod='S') THEN
         -- TODO: Average costing cost method change
         SELECT stdcost(NEW.itemsite_item_id) * NEW.itemsite_qtyonhand
@@ -447,7 +414,7 @@ BEGIN
         WHERE (planord_itemsite_id=NEW.itemsite_id);
       END IF;
     END IF;
-    
+
   END IF;  -- End Maintenance
 
   RETURN NEW;

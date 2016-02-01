@@ -6,6 +6,9 @@ if (typeof XT === 'undefined') {
   XT = {};
 }
 
+/**
+  Manages the importation and export of foreign-language translations from the database.
+*/
 (function () {
   "use strict";
 
@@ -28,8 +31,7 @@ if (typeof XT === 'undefined') {
    */
   exports.getDictionarySql = function (extension, callback) {
     var isLibOrm = extension.indexOf("lib/orm") >= 0,
-      isApplicationCore = extension.indexOf("enyo-client") >= 0 &&
-        extension.indexOf("extension") < 0,
+      isApplicationCore = /xtuple$/.test(extension),
       clientHash,
       databaseHash,
       filename;
@@ -49,7 +51,7 @@ if (typeof XT === 'undefined') {
     } else if (isApplicationCore) {
       // put the client strings into one query
       // put the database strings into another query
-      clientHash = require(path.join(extension, "application/source/en/strings.js")).language.strings;
+      clientHash = require(path.join(extension, "enyo-client/application/source/en/strings.js")).language.strings;
       databaseHash = require(path.join(extension, "database/source/en/strings.js")).language.strings;
       callback(null, createQuery(clientHash) + createQuery(databaseHash, "_database_"));
 
@@ -201,6 +203,13 @@ if (typeof XT === 'undefined') {
               source: stringObj.value,
               target: preExistingTranslation
             });
+          } else if ( destinationLang.indexOf('en') === 0 ) {
+             // if locale is en_AU en_GB copy the en_US source: strings to target:
+             stringCallback(null, {
+               key: stringObj.key,
+               source: stringObj.value,
+               target: stringObj.value
+             });
           } else {
             // ask google (or not)
             autoTranslate(stringObj.value, apiKey, destinationLang, function (err, target) {
@@ -210,7 +219,7 @@ if (typeof XT === 'undefined') {
                 target: target
               });
             });
-          }
+         }
         };
         async.map(stringsArray, processString, function (err, strings) {
           extensionCallback(null, {
@@ -255,14 +264,13 @@ if (typeof XT === 'undefined') {
   /**
     Takes a dictionary definition file and inserts the data into the database
    */
-  exports.importDictionary = function (database, filename, masterCallback) {
-    var creds = require("../../node-datasource/config").databaseServer;
+  var importDictionary = exports.importDictionary = function (options, masterCallback) {
+    var database = options.database;
+    var filename = options.filename;
+    var creds = require(options.configPath || "../../node-datasource/config").databaseServer;
     creds.database = database;
 
-    // the filename relative unless it starts with a slash
-    if (filename.substring(0, 1) !== '/') {
-      filename = path.join(process.cwd(), filename);
-    }
+    filename = path.resolve(process.cwd(), filename);
     if (path.extname(filename) !== '.js') {
       console.log("Skipping non-dictionary file", filename);
       masterCallback();
@@ -291,5 +299,21 @@ if (typeof XT === 'undefined') {
       });
     });
   };
+
+  exports.importAllDictionaries = function (options, callback) {
+    var translationsDir = path.join(__dirname, "../../node_modules/xtuple-linguist/translations");
+    if (!fs.existsSync(translationsDir)) {
+      console.log("No translations directory found. Ignoring linguist.");
+      return callback();
+    }
+    var importOne = function (dictionary, next) {
+      importDictionary({database: options.database, filename: dictionary, configPath: options.configPath}, next);
+    };
+    var allDictionaries = _.map(fs.readdirSync(translationsDir), function (filename) {
+      return path.join(translationsDir, filename);
+    });
+    async.map(allDictionaries, importOne, callback);
+  };
+
 
 }());
